@@ -18,6 +18,8 @@ struct spinlock pid_lock;
 extern void forkret(void);
 static void freeproc(struct proc *p);
 
+extern uint ticks;
+
 extern char trampoline[]; // trampoline.S
 
 // helps ensure that wakeups of wait()ing
@@ -124,6 +126,11 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->runticks = 0;
+  p->nsched   = 0;
+  p->ctime    = ticks;
+  p->level    = 0;
+  p->used     = 0;
 
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
@@ -449,6 +456,7 @@ scheduler(void)
         // to release its lock and then reacquire it
         // before jumping back to us.
         p->state = RUNNING;
+        p->nsched++;
         c->proc = p;
         swtch(&c->context, &p->context);
 

@@ -6,6 +6,9 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "vm.h"
+#include "pinfo.h"
+
+extern struct proc proc[];
 
 uint64
 sys_exit(void)
@@ -109,4 +112,40 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_getpinfo(void)
+{
+  uint64 buf;
+  int max;
+  argaddr(0, &buf);
+  argint(1, &max);
+  if(max < 0)
+    return -1;
+
+  struct proc *me = myproc();
+  int n = 0;
+  for(struct proc *p = proc; p < &proc[NPROC] && n < max; p++){
+    struct pinfo info;
+    acquire(&p->lock);
+    if(p->state == UNUSED){
+      release(&p->lock);
+      continue;
+    }
+    info.pid = p->pid;
+    info.state = p->state;
+    info.level = p->level;
+    info.runticks = p->runticks;
+    info.nsched = p->nsched;
+    info.ctime = p->ctime;
+    safestrcpy(info.name, p->name, sizeof(info.name));
+    release(&p->lock);
+
+    if(copyout(me->pagetable, me->sz, buf + n*sizeof(info),
+               (char*)&info, sizeof(info)) < 0)
+      return -1;
+    n++;
+  }
+  return n;
 }
