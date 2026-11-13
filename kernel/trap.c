@@ -83,10 +83,7 @@ usertrap(void)
 
   // give up the CPU if this is a timer interrupt.
   if (which_dev == 2){
-    acquire(&p->lock);
-    p->runticks++;
-    release(&p->lock);
-    yield();
+    if(mlfq_tick(p)) yield();
   }
 
   prepare_return();
@@ -160,10 +157,7 @@ kerneltrap()
   // give up the CPU if this is a timer interrupt.
   if (which_dev == 2 && myproc() != 0){
     struct proc *p = myproc();
-    acquire(&p->lock);
-    p->runticks++;
-    release(&p->lock);
-    yield();
+    if(mlfq_tick(p)) yield();
   }
 
   // the yield() may have caused some traps to occur,
@@ -178,6 +172,8 @@ clockintr()
   if (cpuid() == 0) {
     acquire(&tickslock);
     ticks++;
+    if(ticks % 64 == 0)
+      mlfq_boost();
     wakeup(&ticks);
     release(&tickslock);
   }

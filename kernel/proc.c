@@ -28,6 +28,9 @@ extern char trampoline[]; // trampoline.S
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
 
+static int slice[4] = {1,2,4,8};
+static int cursor[4] = {-1,-1,-1,-1};
+
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
 // guard page.
@@ -448,32 +451,34 @@ scheduler(void)
     intr_on();
     intr_off();
 
-    int found = 0;
-    for (p = proc; p < &proc[NPROC]; p++) {
+    int best = 4;
+    for(p = proc; p < &proc[NPROC]; p++){          // pass 1: find best level
       acquire(&p->lock);
-      if (p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        p->nsched++;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Don't re-enable interrupts on release.
-        mycpu()->intena = 0;
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
-      }
+      if(p->state == RUNNABLE && p->level < best) best = p->level;
       release(&p->lock);
     }
-    if (found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
-      asm volatile("wfi");
+    int found = 0;
+    if(best < 4){
+      for(int k = 1; k <= NPROC; k++){             // pass 2: round-robin from cursor
+        int i = (cursor[best] + k) % NPROC;
+        p = &proc[i];
+        acquire(&p->lock);
+        if(p->state == RUNNABLE && p->level == best){
+          cursor[best] = i;
+          p->state = RUNNING;
+          p->nsched++;
+          c->proc = p;
+          swtch(&c->context, &p->context);
+          c->proc = 0;
+          found = 1;
+          release(&p->lock);
+          break;
+        }
+        release(&p->lock);
+      }
     }
+    if(!found){ 
+      asm volatile("wfi"); }
   }
 }
 
@@ -707,5 +712,44 @@ procdump(void)
       state = "???";
     printk("%d %s %s", p->pid, state, p->name);
     printk("\n");
+  }
+}
+
+int
+mlfq_tick(struct proc *p){
+  int yield_now = 0, lvl;
+
+  acquire(&p->lock);
+  p->runticks++;
+  p->used++;
+  if(p->used >= slice[p->level]){
+    if(p->level < 3) p->level++;
+    p->used = 0;
+    yield_now = 1;
+  }
+  lvl = p->level;
+  release(&p->lock);
+
+  if(yield_now) return 1;
+
+  // preempt if a higher-priority (strictly lower-numbered) process is RUNNABLE
+  for(struct proc *q = proc; q < &proc[NPROC]; q++){
+    if(q == p) continue;
+    acquire(&q->lock);
+    int hit = (q->state == RUNNABLE && q->level < lvl);
+    release(&q->lock);
+    if(hit) return 1;
+  }
+  return 0;
+}
+
+void
+mlfq_boost(void)
+{
+  for(struct proc *p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    p->level = 0;
+    p->used = 0;
+    release(&p->lock);
   }
 }
